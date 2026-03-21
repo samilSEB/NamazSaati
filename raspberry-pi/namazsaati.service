@@ -1,0 +1,27 @@
+[Unit]
+Description=NamazSaati - Automatischer Gebetswecker
+# Startet erst wenn Netzwerk und Zeit synchronisiert sind
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/NamazSaati/raspberry-pi
+
+# Beide Dienste starten: Daemon + Web-Interface
+ExecStart=/bin/bash -c '\
+    python3 namazsaati.py & \
+    python3 web_app.py'
+
+# Automatischer Neustart bei Absturz oder Stromtrennung
+Restart=always
+RestartSec=10
+
+# Logs ins System-Journal
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Startet automatisch beim Booten
+WantedBy=multi-user.target
