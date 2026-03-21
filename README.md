@@ -7,7 +7,8 @@ Läuft auf einem Raspberry Pi Zero 2W — kein Löten, einfach einstecken.
 
 - Spielt den Ezan automatisch zu jeder der 5 täglichen Gebetszeiten
 - Zeigt alle Gebetszeiten + Countdown im Browser an (`http://namazsaati.local:5000`)
-- Läuft für immer — startet automatisch beim Einschalten
+- **Startet nach Stromausfall vollautomatisch** — keine Einrichtung nötig
+- Keine App, keine Cloud, kein Abo — läuft lokal für immer
 
 ## Hardware (kein Löten, ~45€)
 
