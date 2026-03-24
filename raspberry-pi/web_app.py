@@ -144,6 +144,7 @@ input[type=range]{width:100%;accent-color:#e2b96f}
     </div>
     <button class="btn btn-gold" onclick="saveSettings()">Speichern</button>
     <button class="btn btn-outline" style="margin-top:8px" onclick="testEzan()">▶ Ezan jetzt abspielen</button>
+    <button class="btn btn-danger" style="margin-top:8px" onclick="stopEzan()">■ Ezan stoppen</button>
     <div class="upload-area">
       <p>Ezan-Datei hochladen</p>
       <input type="file" id="audio-file" accept=".mp3,.wav,.ogg" onchange="uploadAudio(this)">
@@ -253,6 +254,11 @@ async function saveSettings() {
 async function testEzan() {
   const res = await fetch('/api/ezan/test', {method:'POST'});
   showMsg('settings-msg', res.ok ? 'Ezan wird abgespielt...' : 'Fehler.', res.ok);
+}
+
+async function stopEzan() {
+  const res = await fetch('/api/ezan/stop', {method:'POST'});
+  showMsg('settings-msg', res.ok ? 'Gestoppt.' : 'Fehler.', res.ok);
 }
 
 async function uploadAudio(input) {
@@ -413,6 +419,15 @@ def test_ezan():
         subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{vol}%"],
                        capture_output=True, timeout=5)
         subprocess.Popen(["mpg123", "-q", str(ezan_file)])
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/ezan/stop", methods=["POST"])
+def stop_ezan():
+    try:
+        subprocess.run(["pkill", "-f", "mpg123"], capture_output=True, timeout=5)
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
