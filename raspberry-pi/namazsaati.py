@@ -25,6 +25,9 @@ from prayer_calculator import get_prayer_times, get_next_prayer, PRAYER_NAMES
 AUDIO_DIR = Path(__file__).parent / "audio"
 EZAN_FILE = AUDIO_DIR / "ezan.mp3"
 TIMEZONE = ZoneInfo("Europe/Berlin")
+BLUETOOTH_MAC = "60:AB:D2:11:7D:7D"
+BLUETOOTH_SINK = "bluez_sink.60_AB_D2_11_7D_7D.a2dp_sink"
+KEEP_ALIVE_INTERVAL = 14 * 60  # 14 Minuten
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,6 +38,43 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger("namazsaati")
+
+
+def setup_bluetooth() -> None:
+    """Verbindet Bluetooth-Lautsprecher beim Start und setzt ihn als Standard-Ausgabe."""
+    log.info("Verbinde Bluetooth-Lautsprecher %s...", BLUETOOTH_MAC)
+    try:
+        subprocess.run(["bluetoothctl", "connect", BLUETOOTH_MAC], timeout=15, capture_output=True)
+        time.sleep(3)
+        subprocess.run(["pactl", "set-default-sink", BLUETOOTH_SINK], timeout=5, capture_output=True)
+        log.info("Bluetooth verbunden und als Audio-Ausgabe gesetzt.")
+    except Exception as e:
+        log.warning("Bluetooth-Setup fehlgeschlagen (kein Ton?): %s", e)
+
+
+def keep_bluetooth_alive() -> None:
+    """Spielt 1 Sekunde Stille um den Bluetooth-Lautsprecher wach zu halten."""
+    try:
+        subprocess.run(
+            ["aplay", "-q", "-d", "1", "-f", "S16_LE", "-c", "2", "-r", "44100", "/dev/zero"],
+            timeout=5,
+            capture_output=True,
+        )
+    except Exception:
+        pass
+
+
+def sleep_with_keepalive(seconds: float) -> None:
+    """Schläft die angegebene Zeit, hält dabei alle 14 Minuten den Bluetooth wach."""
+    end = time.time() + seconds
+    while True:
+        remaining = end - time.time()
+        if remaining <= 0:
+            break
+        chunk = min(remaining, KEEP_ALIVE_INTERVAL)
+        time.sleep(chunk)
+        if time.time() < end:
+            keep_bluetooth_alive()
 
 
 def play_ezan() -> bool:
@@ -96,6 +136,8 @@ def run_daemon() -> None:
     Läuft für immer. Neuberechnung bei jedem Gebet (tagesaktuell).
     """
     log.info("NamazSaati gestartet.")
+    time.sleep(10)  # Warte bis Bluetooth-Dienst bereit ist
+    setup_bluetooth()
 
     if not EZAN_FILE.exists():
         log.warning(
@@ -124,7 +166,7 @@ def run_daemon() -> None:
 
         wait = seconds_until(h, m)
         log.info("Warte %.0f Sekunden (%.1f Stunden)...", wait, wait / 3600)
-        time.sleep(wait)
+        sleep_with_keepalive(wait)
 
         # Kurz nach dem Aufwachen: Zeit nochmal prüfen (Schlaf kann ungenau sein)
         now_check = datetime.now(TIMEZONE)

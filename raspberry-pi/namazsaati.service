@@ -6,8 +6,9 @@ Wants=network-online.target time-sync.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/NamazSaati/raspberry-pi
+User=samil
+WorkingDirectory=/home/samil/NamazSaati/raspberry-pi
+Environment=PULSE_RUNTIME_PATH=/run/user/1000/pulse
 
 # Beide Dienste starten: Daemon + Web-Interface
 ExecStart=/bin/bash -c '\
