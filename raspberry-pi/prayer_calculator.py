@@ -3,13 +3,18 @@ NamazSaati - Gebetszeit-Berechnung
 Diyanet-Methode: Fajr 18°, Isha 17°, Asr Shafi
 Standort: Ludwigsburg, Deutschland (48.8975°N, 9.1925°E)
 
-Berechnet alle 5 täglichen Gebetszeiten für ein gegebenes Datum
-unter Berücksichtigung der Sommerzeit (Europe/Berlin).
+Holt Gebetszeiten von der AlAdhan-API (Diyanet-Methode).
+Fallback auf lokale Berechnung wenn kein Internet verfügbar.
 """
 
 import math
+import urllib.request
+import json
+import logging
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
+
+log = logging.getLogger("namazsaati")
 
 # --- Standort & Methode ---
 LATITUDE = 48.8975
@@ -95,6 +100,37 @@ def _night_fallback(transit_utc: float, sunrise_ha: float, dt: date, is_fajr: bo
         return _utc_hours_to_local(sunset_utc + night_hours / 7.0, dt)
 
 
+def _fetch_prayer_times_api(year: int, month: int, day: int) -> dict[str, tuple[int, int]] | None:
+    """
+    Holt Gebetszeiten von der AlAdhan-API (Diyanet-Methode 13).
+    Gibt None zurück wenn die API nicht erreichbar ist.
+    """
+    url = (
+        f"https://api.aladhan.com/v1/timings/{day:02d}-{month:02d}-{year}"
+        f"?latitude={LATITUDE}&longitude={LONGITUDE}&method=13"
+        f"&timezonestring=Europe/Berlin"
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read())
+        timings = data["data"]["timings"]
+
+        def parse(t: str) -> tuple[int, int]:
+            h, m = t.split(":")
+            return int(h), int(m)
+
+        return {
+            "fajr":    parse(timings["Fajr"]),
+            "dhuhr":   parse(timings["Dhuhr"]),
+            "asr":     parse(timings["Asr"]),
+            "maghrib": parse(timings["Maghrib"]),
+            "isha":    parse(timings["Isha"]),
+        }
+    except Exception as e:
+        log.warning("AlAdhan-API nicht erreichbar, nutze lokale Berechnung: %s", e)
+        return None
+
+
 def get_prayer_times(year: int, month: int, day: int) -> dict[str, tuple[int, int]]:
     """
     Berechnet alle 5 Gebetszeiten für ein Datum.
@@ -103,6 +139,10 @@ def get_prayer_times(year: int, month: int, day: int) -> dict[str, tuple[int, in
                "maghrib": (h, m), "isha": (h, m)}
     Alle Zeiten in Lokalzeit (Europe/Berlin, inkl. Sommerzeit).
     """
+    api_result = _fetch_prayer_times_api(year, month, day)
+    if api_result:
+        return api_result
+
     dt = date(year, month, day)
     jd = julian_day(year, month, day)
     decl, EqT = sun_position(jd + 0.5)

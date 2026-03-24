@@ -171,7 +171,10 @@ def run_daemon() -> None:
         # Kurz nach dem Aufwachen: Zeit nochmal prüfen (Schlaf kann ungenau sein)
         now_check = datetime.now(TIMEZONE)
         log.info("Aufgewacht um %02d:%02d — Zeit für %s", now_check.hour, now_check.minute, name.capitalize())
-        play_ezan()
+        if name == "fajr":
+            log.info("Fajr — kein Ezan (übersprungen).")
+        else:
+            play_ezan()
 
         # 2 Minuten warten, damit das gleiche Gebet nicht doppelt ausgelöst wird
         time.sleep(120)
