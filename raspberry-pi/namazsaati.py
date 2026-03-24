@@ -20,13 +20,12 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from prayer_calculator import get_prayer_times, get_next_prayer, PRAYER_NAMES
+from config import load_config
 
-# --- Konfiguration ---
+# --- Konstanten ---
 AUDIO_DIR = Path(__file__).parent / "audio"
 EZAN_FILE = AUDIO_DIR / "ezan.mp3"
 TIMEZONE = ZoneInfo("Europe/Berlin")
-BLUETOOTH_MAC = "60:AB:D2:11:7D:7D"
-BLUETOOTH_SINK = "bluez_sink.60_AB_D2_11_7D_7D.a2dp_sink"
 KEEP_ALIVE_INTERVAL = 14 * 60  # 14 Minuten
 
 logging.basicConfig(
@@ -40,20 +39,58 @@ logging.basicConfig(
 log = logging.getLogger("namazsaati")
 
 
-def setup_bluetooth() -> None:
-    """Verbindet Bluetooth-Lautsprecher beim Start und setzt ihn als Standard-Ausgabe."""
-    log.info("Verbinde Bluetooth-Lautsprecher %s...", BLUETOOTH_MAC)
+def _mac_to_sink(mac: str) -> str:
+    return "bluez_sink." + mac.replace(":", "_") + ".a2dp_sink"
+
+
+def _bluetooth_sink_active(sink: str) -> bool:
     try:
-        subprocess.run(["bluetoothctl", "connect", BLUETOOTH_MAC], timeout=15, capture_output=True)
-        time.sleep(3)
-        subprocess.run(["pactl", "set-default-sink", BLUETOOTH_SINK], timeout=5, capture_output=True)
+        result = subprocess.run(["pactl", "list", "short", "sinks"], capture_output=True, timeout=5)
+        return sink.encode() in result.stdout
+    except Exception:
+        return False
+
+
+def ensure_bluetooth_connected() -> None:
+    """Verbindet Bluetooth-Lautsprecher falls nicht verbunden. Wartet auf PulseAudio."""
+    cfg = load_config()
+    mac = cfg["bluetooth_mac"]
+    sink = _mac_to_sink(mac)
+
+    # Warte bis PulseAudio bereit ist (max. 60 Sekunden)
+    for _ in range(30):
+        result = subprocess.run(["pactl", "info"], capture_output=True, timeout=5)
+        if result.returncode == 0:
+            break
+        time.sleep(2)
+    else:
+        log.warning("PulseAudio nicht erreichbar — Bluetooth-Setup übersprungen.")
+        return
+
+    if _bluetooth_sink_active(sink):
+        return  # Bereits verbunden
+
+    log.info("Verbinde Bluetooth-Lautsprecher %s...", mac)
+    try:
+        subprocess.run(["bluetoothctl", "connect", mac], timeout=15, capture_output=True)
+        # Warte bis der Bluetooth-Sink erscheint (max. 20 Sekunden)
+        for _ in range(10):
+            time.sleep(2)
+            if _bluetooth_sink_active(sink):
+                break
+        subprocess.run(["pactl", "set-default-sink", sink], timeout=5, capture_output=True)
         log.info("Bluetooth verbunden und als Audio-Ausgabe gesetzt.")
     except Exception as e:
-        log.warning("Bluetooth-Setup fehlgeschlagen (kein Ton?): %s", e)
+        log.warning("Bluetooth nicht erreichbar, nächster Versuch in 14 Minuten: %s", e)
 
 
 def keep_bluetooth_alive() -> None:
-    """Spielt 1 Sekunde Stille um den Bluetooth-Lautsprecher wach zu halten."""
+    """Hält Bluetooth verbunden: reconnect falls getrennt, sonst Stille spielen."""
+    cfg = load_config()
+    sink = _mac_to_sink(cfg["bluetooth_mac"])
+    if not _bluetooth_sink_active(sink):
+        ensure_bluetooth_connected()
+        return
     try:
         subprocess.run(
             ["aplay", "-q", "-d", "1", "-f", "S16_LE", "-c", "2", "-r", "44100", "/dev/zero"],
@@ -77,6 +114,16 @@ def sleep_with_keepalive(seconds: float) -> None:
             keep_bluetooth_alive()
 
 
+def set_volume(volume: int) -> None:
+    """Setzt die PulseAudio-Lautstärke (0-100)."""
+    try:
+        pct = f"{max(0, min(100, volume))}%"
+        subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", pct],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+
 def play_ezan() -> bool:
     """
     Spielt die Ezan-Datei über den Standard-Audio-Ausgang.
@@ -85,18 +132,20 @@ def play_ezan() -> bool:
     if not EZAN_FILE.exists():
         log.error(
             "Ezan-Datei nicht gefunden: %s\n"
-            "Bitte ezan.mp3 in das audio/-Verzeichnis kopieren.\n"
-            "Anleitung: raspberry-pi/docs/SETUP.md",
+            "Bitte ezan.mp3 in das audio/-Verzeichnis kopieren.",
             EZAN_FILE,
         )
         return False
+
+    cfg = load_config()
+    set_volume(cfg.get("volume", 70))
 
     log.info("Ezan wird abgespielt...")
     try:
         subprocess.run(
             ["mpg123", "-q", str(EZAN_FILE)],
             check=True,
-            timeout=600,  # Max. 10 Minuten Timeout
+            timeout=600,
         )
         log.info("Ezan fertig.")
         return True
@@ -107,9 +156,7 @@ def play_ezan() -> bool:
         log.error("Ezan-Wiedergabe hat 10 Minuten überschritten — abgebrochen.")
         return False
     except FileNotFoundError:
-        log.error(
-            "mpg123 nicht gefunden. Installation: sudo apt install mpg123"
-        )
+        log.error("mpg123 nicht gefunden. Installation: sudo apt install mpg123")
         return False
 
 
@@ -123,7 +170,6 @@ def seconds_until(target_hour: int, target_minute: int) -> float:
 
 
 def log_todays_times(times: dict) -> None:
-    """Gibt alle heutigen Gebetszeiten ins Log aus."""
     log.info("Heutige Gebetszeiten (Ludwigsburg, Diyanet):")
     for name in PRAYER_NAMES:
         h, m = times[name]
@@ -136,8 +182,7 @@ def run_daemon() -> None:
     Läuft für immer. Neuberechnung bei jedem Gebet (tagesaktuell).
     """
     log.info("NamazSaati gestartet.")
-    time.sleep(10)  # Warte bis Bluetooth-Dienst bereit ist
-    setup_bluetooth()
+    ensure_bluetooth_connected()
 
     if not EZAN_FILE.exists():
         log.warning(
@@ -147,15 +192,16 @@ def run_daemon() -> None:
         )
 
     while True:
+        cfg = load_config()  # Config bei jedem Gebet neu laden
+        prayers_enabled = cfg.get("prayers_enabled", {})
+
         now = datetime.now(TIMEZONE)
         times = get_prayer_times(now.year, now.month, now.day)
         log_todays_times(times)
 
-        # Nächstes Gebet bestimmen
         name, h, m = get_next_prayer(times, now.hour, now.minute)
 
         if h == -1:
-            # Alle Gebete für heute vorbei → Fajr morgen
             tomorrow = date.today() + timedelta(days=1)
             tomorrow_times = get_prayer_times(tomorrow.year, tomorrow.month, tomorrow.day)
             h, m = tomorrow_times["fajr"]
@@ -168,15 +214,14 @@ def run_daemon() -> None:
         log.info("Warte %.0f Sekunden (%.1f Stunden)...", wait, wait / 3600)
         sleep_with_keepalive(wait)
 
-        # Kurz nach dem Aufwachen: Zeit nochmal prüfen (Schlaf kann ungenau sein)
         now_check = datetime.now(TIMEZONE)
         log.info("Aufgewacht um %02d:%02d — Zeit für %s", now_check.hour, now_check.minute, name.capitalize())
-        if name == "fajr":
-            log.info("Fajr — kein Ezan (übersprungen).")
-        else:
-            play_ezan()
 
-        # 2 Minuten warten, damit das gleiche Gebet nicht doppelt ausgelöst wird
+        if prayers_enabled.get(name, True):
+            play_ezan()
+        else:
+            log.info("%s — Ezan deaktiviert (Einstellungen).", name.capitalize())
+
         time.sleep(120)
 
 
