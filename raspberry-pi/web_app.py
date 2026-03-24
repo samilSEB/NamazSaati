@@ -500,27 +500,50 @@ def bt_scan():
 
 @app.route("/api/bluetooth/connect", methods=["POST"])
 def bt_connect():
+    import time
     data = request.get_json(force=True)
     mac = data.get("mac", "")
     name = data.get("name", mac)
     if not mac:
         return jsonify({"ok": False, "message": "Keine MAC-Adresse"}), 400
 
+    sink = "bluez_sink." + mac.replace(":", "_") + ".a2dp_sink"
+
+    def sink_active():
+        try:
+            r = subprocess.run(["pactl", "list", "short", "sinks"],
+                               capture_output=True, timeout=5)
+            return sink.encode() in r.stdout
+        except Exception:
+            return False
+
     try:
-        result = subprocess.run(["bluetoothctl", "connect", mac],
-                                capture_output=True, timeout=20, text=True)
-        if "Connection successful" in result.stdout or "Connected: yes" in result.stdout or result.returncode == 0:
-            sink = "bluez_sink." + mac.replace(":", "_") + ".a2dp_sink"
-            import time
-            time.sleep(3)
-            subprocess.run(["pactl", "set-default-sink", sink],
+        # Pairen falls noch nicht bekannt
+        info = subprocess.run(["bluetoothctl", "info", mac],
+                              capture_output=True, timeout=5, text=True)
+        if "Paired: yes" not in info.stdout:
+            subprocess.run(["bluetoothctl", "pair", mac],
+                           capture_output=True, timeout=30)
+            subprocess.run(["bluetoothctl", "trust", mac],
                            capture_output=True, timeout=5)
-            cfg = load_config()
-            cfg["bluetooth_mac"] = mac
-            cfg["bluetooth_name"] = name
-            save_config(cfg)
-            return jsonify({"ok": True, "message": f"Verbunden mit {name}"})
-        return jsonify({"ok": False, "message": "Verbindung fehlgeschlagen"}), 500
+
+        # Verbinden
+        subprocess.run(["bluetoothctl", "connect", mac],
+                       capture_output=True, timeout=20)
+
+        # Warte bis Sink erscheint (max 15s) — das ist der echte Erfolgsindikator
+        for _ in range(8):
+            time.sleep(2)
+            if sink_active():
+                subprocess.run(["pactl", "set-default-sink", sink],
+                               capture_output=True, timeout=5)
+                cfg = load_config()
+                cfg["bluetooth_mac"] = mac
+                cfg["bluetooth_name"] = name
+                save_config(cfg)
+                return jsonify({"ok": True, "message": f"Verbunden mit {name}"})
+
+        return jsonify({"ok": False, "message": "Verbindung fehlgeschlagen — Lautsprecher einschalten?"}), 500
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
 

@@ -136,9 +136,10 @@ def keep_bluetooth_alive() -> None:
         ensure_bluetooth_connected()
         return
     try:
+        # Stille über PulseAudio spielen damit der Bose-Lautsprecher nicht einschläft
         subprocess.run(
-            ["aplay", "-q", "-d", "1", "-f", "S16_LE", "-c", "2", "-r", "44100", "/dev/zero"],
-            timeout=5,
+            ["paplay", "--raw", "--format=s16le", "--rate=44100", "--channels=2", "/dev/zero"],
+            timeout=2,
             capture_output=True,
         )
     except Exception:
