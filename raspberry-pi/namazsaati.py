@@ -15,6 +15,7 @@ import sys
 import time
 import subprocess
 import logging
+import threading
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -37,6 +38,49 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger("namazsaati")
+
+
+def _start_button_listener() -> None:
+    """
+    Lauscht im Hintergrund auf den Play/Pause-Tastendruck des Bluetooth-Lautsprechers.
+    Stoppt mpg123 wenn der Knopf gedrückt wird.
+    """
+    def _listen():
+        try:
+            import evdev
+        except ImportError:
+            log.warning("evdev nicht installiert — Knopf-Steuerung deaktiviert. (pip3 install evdev)")
+            return
+
+        log.info("Knopf-Listener gestartet (wartet auf Play/Pause).")
+        while True:
+            try:
+                # Suche Bluetooth-Gerät mit Play/Pause-Fähigkeit
+                device = None
+                for path in evdev.list_devices():
+                    dev = evdev.InputDevice(path)
+                    if evdev.ecodes.KEY_PLAYPAUSE in dev.capabilities().get(evdev.ecodes.EV_KEY, []):
+                        device = dev
+                        log.info("Bluetooth-Taste gefunden: %s (%s)", dev.name, path)
+                        break
+
+                if not device:
+                    time.sleep(10)
+                    continue
+
+                for event in device.read_loop():
+                    if (event.type == evdev.ecodes.EV_KEY and
+                            event.code == evdev.ecodes.KEY_PLAYPAUSE and
+                            event.value == 1):
+                        log.info("Play/Pause gedrückt — stoppe Ezan.")
+                        subprocess.run(["pkill", "-f", "mpg123"], capture_output=True)
+
+            except Exception as e:
+                log.debug("Knopf-Listener Fehler (reconnect): %s", e)
+                time.sleep(5)
+
+    t = threading.Thread(target=_listen, daemon=True)
+    t.start()
 
 
 def _mac_to_sink(mac: str) -> str:
@@ -182,6 +226,7 @@ def run_daemon() -> None:
     Läuft für immer. Neuberechnung bei jedem Gebet (tagesaktuell).
     """
     log.info("NamazSaati gestartet.")
+    _start_button_listener()
     ensure_bluetooth_connected()
 
     if not EZAN_FILE.exists():
