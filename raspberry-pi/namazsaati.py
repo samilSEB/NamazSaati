@@ -103,9 +103,12 @@ def ensure_bluetooth_connected() -> None:
 
     # Warte bis PulseAudio bereit ist (max. 60 Sekunden)
     for _ in range(30):
-        result = subprocess.run(["pactl", "info"], capture_output=True, timeout=5)
-        if result.returncode == 0:
-            break
+        try:
+            result = subprocess.run(["pactl", "info"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                break
+        except Exception:
+            pass
         time.sleep(2)
     else:
         log.warning("PulseAudio nicht erreichbar — Bluetooth-Setup übersprungen.")
