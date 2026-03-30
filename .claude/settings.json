@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"import\\\\|from\" /Users/samilozturk/NamazSaati/raspberry-pi/*.py ! -path \"*/.venv/*\")"
+    ]
+  }
+}
