@@ -15,7 +15,7 @@ sudo apt-get update -qq
 sudo apt-get install -y -qq mpg123 python3-pip python3-flask git
 
 echo "[2/5] Python-Abhängigkeiten installieren..."
-pip3 install flask --break-system-packages --quiet
+pip3 install flask evdev --break-system-packages --quiet
 
 # 3. Audio-Verzeichnis erstellen
 echo "[3/5] Verzeichnisse erstellen..."
