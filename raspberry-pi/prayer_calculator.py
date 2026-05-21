@@ -1,12 +1,14 @@
 """
 NamazSaati - Gebetszeit-Berechnung
-Diyanet-Methode: Fajr 18°, Isha 17°, Asr Shafi
 Standort: Ludwigsburg, Deutschland (48.8975°N, 9.1925°E)
 
-Holt Gebetszeiten von der AlAdhan-API (Diyanet-Methode).
-Fallback auf lokale Berechnung wenn kein Internet verfügbar.
+Quellen (in Reihenfolge):
+1. Offizielle Diyanet-Website (namazvakitleri.diyanet.gov.tr) — scraped, gesamtes Jahr im Cache
+2. AlAdhan-API (Methode 13 = Diyanet) — Fallback bei Netzwerkproblemen
+3. Lokale astronomische Berechnung — letzter Fallback ohne Internet
 """
 
+import re
 import math
 import urllib.request
 import json
@@ -100,6 +102,58 @@ def _night_fallback(transit_utc: float, sunrise_ha: float, dt: date, is_fajr: bo
         return _utc_hours_to_local(sunset_utc + night_hours / 7.0, dt)
 
 
+_diyanet_cache: dict[tuple[int, int, int], dict[str, tuple[int, int]]] = {}
+
+DIYANET_URL = "https://namazvakitleri.diyanet.gov.tr/de-DE/11048/ludwigsburg-gebetszeiten"
+_DIYANET_PATTERN = re.compile(
+    r'(\d{2})\.(\d{2})\.(\d{4})</td>\s*<td>[^<]*</td>'
+    r'\s*<td>(\d{2}:\d{2})</td>'
+    r'\s*<td>(\d{2}:\d{2})</td>'
+    r'\s*<td>(\d{2}:\d{2})</td>'
+    r'\s*<td>(\d{2}:\d{2})</td>'
+    r'\s*<td>(\d{2}:\d{2})</td>'
+    r'\s*<td>(\d{2}:\d{2})</td>'
+)
+
+
+def _load_diyanet_cache() -> None:
+    """Lädt Gebetszeiten des gesamten Jahres von der Diyanet-Website in den Cache."""
+    try:
+        req = urllib.request.Request(DIYANET_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8")
+
+        def parse(t: str) -> tuple[int, int]:
+            h, m = t.split(":")
+            return int(h), int(m)
+
+        count = 0
+        for m in _DIYANET_PATTERN.finditer(html):
+            d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            _diyanet_cache[(y, mo, d)] = {
+                "fajr":    parse(m.group(4)),
+                "dhuhr":   parse(m.group(6)),
+                "asr":     parse(m.group(7)),
+                "maghrib": parse(m.group(8)),
+                "isha":    parse(m.group(9)),
+            }
+            count += 1
+
+        if count:
+            log.info("Diyanet: %d Tage geladen.", count)
+        else:
+            log.warning("Diyanet: Keine Zeiten gefunden (HTML-Struktur geändert?).")
+    except Exception as e:
+        log.warning("Diyanet-Website nicht erreichbar: %s", e)
+
+
+def _fetch_prayer_times_diyanet(year: int, month: int, day: int) -> dict[str, tuple[int, int]] | None:
+    """Gibt Diyanet-Zeiten aus dem Cache, lädt den Cache bei Bedarf."""
+    if not _diyanet_cache:
+        _load_diyanet_cache()
+    return _diyanet_cache.get((year, month, day))
+
+
 def _fetch_prayer_times_api(year: int, month: int, day: int) -> dict[str, tuple[int, int]] | None:
     """
     Holt Gebetszeiten von der AlAdhan-API (Diyanet-Methode 13).
@@ -139,9 +193,13 @@ def get_prayer_times(year: int, month: int, day: int) -> dict[str, tuple[int, in
                "maghrib": (h, m), "isha": (h, m)}
     Alle Zeiten in Lokalzeit (Europe/Berlin, inkl. Sommerzeit).
     """
-    api_result = _fetch_prayer_times_api(year, month, day)
-    if api_result:
-        return api_result
+    result = _fetch_prayer_times_diyanet(year, month, day)
+    if result:
+        return result
+
+    result = _fetch_prayer_times_api(year, month, day)
+    if result:
+        return result
 
     dt = date(year, month, day)
     jd = julian_day(year, month, day)
