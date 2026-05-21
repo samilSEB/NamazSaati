@@ -27,7 +27,7 @@ from config import load_config
 AUDIO_DIR = Path(__file__).parent / "audio"
 EZAN_FILE = AUDIO_DIR / "ezan.mp3"
 TIMEZONE = ZoneInfo("Europe/Berlin")
-KEEP_ALIVE_INTERVAL = 14 * 60  # 14 Minuten
+KEEP_ALIVE_INTERVAL = 4 * 60  # 4 Minuten (JBL schläft nach ~5 Min ein)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,14 +52,22 @@ def _start_button_listener() -> None:
             log.warning("evdev nicht installiert — Knopf-Steuerung deaktiviert. (pip3 install evdev)")
             return
 
-        log.info("Knopf-Listener gestartet (wartet auf Play/Pause).")
+        RELEVANT_KEYS = {
+            evdev.ecodes.KEY_PLAYPAUSE,
+            evdev.ecodes.KEY_VOLUMEUP,
+            evdev.ecodes.KEY_VOLUMEDOWN,
+        }
+
+        log.info("Knopf-Listener gestartet.")
+        current_volume = [load_config().get("volume", 70)]
+
         while True:
             try:
-                # Suche Bluetooth-Gerät mit Play/Pause-Fähigkeit
                 device = None
                 for path in evdev.list_devices():
                     dev = evdev.InputDevice(path)
-                    if evdev.ecodes.KEY_PLAYPAUSE in dev.capabilities().get(evdev.ecodes.EV_KEY, []):
+                    caps = set(dev.capabilities().get(evdev.ecodes.EV_KEY, []))
+                    if RELEVANT_KEYS & caps:
                         device = dev
                         log.info("Bluetooth-Taste gefunden: %s (%s)", dev.name, path)
                         break
@@ -69,11 +77,24 @@ def _start_button_listener() -> None:
                     continue
 
                 for event in device.read_loop():
-                    if (event.type == evdev.ecodes.EV_KEY and
-                            event.code == evdev.ecodes.KEY_PLAYPAUSE and
-                            event.value == 1):
-                        log.info("Play/Pause gedrückt — stoppe Ezan.")
+                    if event.type != evdev.ecodes.EV_KEY or event.value != 1:
+                        continue
+
+                    if event.code == evdev.ecodes.KEY_PLAYPAUSE:
+                        log.info("Pause gedrückt — stoppe Ezan.")
                         subprocess.run(["pkill", "-f", "mpg123"], capture_output=True)
+
+                    elif event.code == evdev.ecodes.KEY_VOLUMEUP:
+                        current_volume[0] = min(100, current_volume[0] + 5)
+                        subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@",
+                                        f"{current_volume[0]}%"], capture_output=True, timeout=3)
+                        log.info("Lautstärke: %d%%", current_volume[0])
+
+                    elif event.code == evdev.ecodes.KEY_VOLUMEDOWN:
+                        current_volume[0] = max(0, current_volume[0] - 5)
+                        subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@",
+                                        f"{current_volume[0]}%"], capture_output=True, timeout=3)
+                        log.info("Lautstärke: %d%%", current_volume[0])
 
             except Exception as e:
                 log.debug("Knopf-Listener Fehler (reconnect): %s", e)
@@ -139,9 +160,9 @@ def keep_bluetooth_alive() -> None:
         ensure_bluetooth_connected()
         return
     try:
-        # Stille über PulseAudio spielen damit der Bose-Lautsprecher nicht einschläft
         subprocess.run(
-            ["paplay", "--raw", "--format=s16le", "--rate=44100", "--channels=2", "/dev/zero"],
+            ["paplay", "--raw", "--format=s16le", "--rate=44100", "--channels=2",
+             f"--device={sink}", "/dev/zero"],
             timeout=2,
             capture_output=True,
         )
